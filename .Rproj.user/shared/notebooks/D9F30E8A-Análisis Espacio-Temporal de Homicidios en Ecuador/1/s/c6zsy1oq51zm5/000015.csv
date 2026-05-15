@@ -1,0 +1,13 @@
+"0",""
+"0","# Extraemos la fecha única"
+"0","indice_unico <- cpts(deteccion_amoc)"
+"0","fecha_ruptura_total <- datos_mensuales$mes[indice_unico]"
+"0",""
+"0","cat(""El quiebre estructural definitivo de la década ocurrió en:\n"")"
+"1","El quiebre estructural definitivo de la década ocurrió en:
+"
+"0","print(fecha_ruptura_total)"
+"1","[1]"
+"1"," ""2022-12-01"""
+"1","
+"

@@ -1,0 +1,220 @@
+---
+title: "Análisis Espacio-Temporal de Homicidios en Ecuador"
+subtitle: "Evaluación de Recurrencia y Relación con Amenidades Urbanas (2014-2026)"
+author: "Daniel Lara Del Salto"
+date: last-modified
+lang: es
+format:
+  html:
+    toc: true
+    toc-depth: 3
+    theme: cosmo
+    code-fold: true
+    number-sections: true
+    self-contained: true
+execute:
+  echo: true
+  warning: false
+  message: false
+editor: visual
+---
+
+```{r}
+library(dplyr)
+library(lubridate)
+library(ggplot2)
+library(sf)
+library(leaflet)
+library(leaflet.extras)
+library(htmlwidgets)
+library(patchwork)
+library(rnaturalearth)
+library(osmdata)
+library(changepoint)
+
+# --- PARÁMETROS CONFIGURABLES (Cambiar aquí para adaptar el análisis) ---
+crs_geo     <- 4326     # WGS84 (Latitud/Longitud ideal para mapas web)
+crs_proy    <- 32717    # UTM Zona 17S (Ideal para medir distancias en metros en Ecuador)
+dist_umbral <- 500      # Distancia en metros para considerar un evento "vecino"
+dias_umbral <- 30       # Días de diferencia para considerar un evento "vecino"
+buffer_pico <- 400      # Metros de radio para extraer amenidades en zonas críticas
+# -------------------------------------------------------------------------
+
+# =============================================================================
+# 2. CARGA Y LIMPIEZA DE DATOS
+# =============================================================================
+# Lectura de bases
+base_1 <- read.csv("D:\\PROYECTO1\\mdi_homicidiosintencionales_pm_2014_2025.csv")
+base_2 <- read.csv("D:\\PROYECTO1\\mdi_homicidiosintencionalse_pm_2026_enero_febrer.csv")
+base_cruda <- bind_rows(base_1, base_2)
+rm(list=c("base_1","base_2"))
+
+# Limpieza y filtrado espacial
+base_limpia <- base_cruda %>%
+  mutate(
+    fecha_infraccion = as.Date(fecha_infraccion, format = "%Y/%m/%d"),
+    # Reemplazar comas por puntos en coordenadas
+    longitud = as.numeric(gsub(",", ".", as.character(coordenada_x))),
+    latitud  = as.numeric(gsub(",", ".", as.character(coordenada_y)))
+  ) %>%
+  # Eliminar NAs y filtrar por el Bounding Box aproximado de Ecuador
+  filter(!is.na(longitud) & !is.na(latitud)) %>%
+  filter(longitud > -82 & longitud < -75) %>%
+  filter(latitud > -6 & latitud < 2)
+```
+
+## INTRODUCCIÓN
+
+### Problemática
+
+Ecuador enfrenta una escalada de violencia letal sin precedentes desde 2021. El análisis de los datos oficiales revela que estos homicidios no ocurren de forma aleatoria, sino que exhiben un agudo comportamiento de "contagio" espacio-temporal, donde un evento violento desencadena rápidamente otros en su entorno inmediato, formando *hot spots* altamente volátiles.
+
+¿En qué medida la proximidad espacial a específicos nodos o amenidades urbanas determina la intensidad de recurrencia de los homicidios en las zonas de mayor riesgo del país?
+
+### Descripción de los Datos
+
+El presente análisis se fundamenta en los registros oficiales de Homicidios Intencionales, obtenidos del portal de Datos Abiertos Ecuador. La base de datos original se estructuró a partir de la consolidación de dos fuentes: la información histórica que abarca el periodo 2014 - 2025 y la actualización más reciente que cubre enero y febrero de 2026. Se cuenta con 31892 observaciones y 35 variables que describen el fenómeno criminal en múltiples dimensiones:
+
+1.  **Dimensión Espacial y Administrativa**
+
+    - Geografía Policial y Política: zona, subzona, distrito, circuito, subcircuito, provincia y cantón.
+
+    - Entorno del Suceso: area_hecho, lugar, tipo_lugar
+
+    - Geolocalización: longitud, latitud.
+
+2.  **Dimensión Temporal**
+
+    - fecha_infracción (YYYY-MM-DD), hora_infraccion (HH:MM:SS)
+
+3.  **Dimensión Criminológica y Contextual**
+
+    - Clasificación del Delito: tipo_muerte
+
+    - Mecanismo: arma, tipo_arma
+
+    - Causa y Motivación: presunta_motivacion, presun_motiva_observada, probable_causa_motivada
+
+4.  **Perfil Demográfico de la Víctima**
+
+    - Características sociodemográficas: edad, sexo, genero, etnia, estado_civil, nacionalidad, instruccion, discapacidad y profesion_registro_civil
+
+## Datos
+
+### Ocurrencia de los datos 
+
+#### NIvel de provincia
+
+```{r}
+tendencia_provincial <- base_limpia %>%
+  mutate(mes_año = floor_date(fecha_infraccion, "month")) %>% 
+  group_by(provincia, mes_año) %>%
+  summarise(total_eventos = n(), .groups = 'drop')
+ggplot(tendencia_provincial, aes(x = mes_año, y = total_eventos, color = provincia)) +
+  geom_line(size = 0.8) +
+  facet_wrap(~provincia, scales = "free_y") + 
+  theme_minimal() +
+  theme(legend.position = "none", 
+        strip.text = element_text(face = "bold", size = 8),
+        axis.text.x = element_text(angle = 45, hjust = 1)) + 
+  labs(title = "Comportamiento Temporal de Eventos por Provincia",
+       x = "Fecha (Mes y Año)",
+       y = "Total de Homicidios")
+```
+
+#### Nivel Nacional
+
+```{r}
+conteo_mensual <- base_limpia %>%
+  mutate(mes_año = floor_date(fecha_infraccion, "month")) %>% 
+  group_by(mes_año) %>%
+  summarise(total_eventos = n(), .groups = 'drop')
+
+grafico_temporal <- ggplot(conteo_mensual, aes(x = mes_año, y = total_eventos)) +
+  geom_line(color = "steelblue", size = 1) +
+  geom_point(color = "darkblue", size = 1.5) +
+  geom_vline(xintercept = as.numeric(as.Date("2026-01-01")), 
+             linetype = "dashed", color = "red", size = 1) +
+  labs(title = "Evolución Mensual de Homicidios (2014 - 2026)",
+       subtitle = "Validación de empalme entre bases históricas y recientes",
+       x = "Mes y Año",
+       y = "Total de Homicidios Mensuales") +
+  theme_minimal()
+
+print(grafico_temporal)
+```
+
+\# 4. Graficamos para ver matemáticamente dónde se rompió la serie
+
+plot(deteccion, main = "Detección Matemática de Rupturas (Puntos de Cambio)",
+
+ylab = "Homicidios", xlab = "Índice de Semana")
+
+```{r}
+# Aplicamos el método AMOC para encontrar LA ruptura principal absoluta
+deteccion_amoc <- cpt.meanvar(ts_homicidios_mes, method = "AMOC")
+
+# Graficamos el punto de no retorno
+plot(deteccion_amoc, main = "Punto de Ruptura Estructural Máximo (AMOC)", 
+     ylab = "Homicidios Mensuales", xlab = "Índice de Mes")
+
+# Extraemos la fecha única
+indice_unico <- cpts(deteccion_amoc)
+fecha_ruptura_total <- datos_mensuales$mes[indice_unico]
+
+cat("El quiebre estructural definitivo de la década ocurrió en:\n")
+print(fecha_ruptura_total)
+```
+
+#### Mapa de calor a nivel nacional
+
+```{r label="mapa-incidencias", fig.cap="Mapa de calor de intensidad de recurrencia."}
+paleta_magma <- c("0.2" = "#440154",  # Morado oscuro
+                  "0.5" = "#9b179f",  # Fucsia
+                  "0.8" = "#ed6925",  # Naranja vibrante
+                  "1.0" = "#fdfa24")
+base_acumulada_mapa <- base_limpia %>%
+  filter(!is.na(longitud) & !is.na(latitud))
+mapa_acumulado <- leaflet(data = base_acumulada_mapa) %>%
+  addProviderTiles(providers$CartoDB.Positron) %>% 
+  addHeatmap(
+    lng = ~longitud, 
+    lat = ~latitud,
+    blur = 18, 
+    radius = 12,
+    gradient = paleta_magma,
+    max = 0.05
+  )
+
+mapa_acumulado
+```
+
+## Metodología
+
+```{r}
+base_sf <- base_limpia %>%
+  mutate(event_id = row_number()) %>% 
+  st_as_sf(coords = c("longitud", "latitud"), crs = crs_geo)
+
+base_con_vecinos <- base_sf %>%
+  mutate(
+    n_vecinos_proximos = sapply(1:n(), function(i) {
+      actual <- base_sf[i, ]
+      
+      # Filtrar eventos futuros dentro de la ventana de tiempo
+      vecinos <- base_sf %>%
+        filter(
+          event_id != actual$event_id,
+          fecha_infraccion > actual$fecha_infraccion | 
+            (fecha_infraccion == actual$fecha_infraccion & event_id > actual$event_id),
+          fecha_infraccion <= (actual$fecha_infraccion + days(dias_umbral))
+        )
+      
+      if(nrow(vecinos) == 0) return(0)
+      
+      # Calcular distancias y contar los que caen dentro del umbral espacial
+      distancias <- st_distance(actual, vecinos)
+      sum(as.numeric(distancias) <= dist_umbral)
+    })
+  )
+```

@@ -1,0 +1,6 @@
+"0","# Aplicamos el método AMOC para encontrar LA ruptura principal absoluta"
+"0","deteccion_amoc <- cpt.meanvar(ts_homicidios_mes, method = ""AMOC"")"
+"0",""
+"0","# Graficamos el punto de no retorno"
+"0","plot(deteccion_amoc, main = ""Punto de Ruptura Estructural Máximo (AMOC)"", "
+"0","     ylab = ""Homicidios Mensuales"", xlab = ""Índice de Mes"")"

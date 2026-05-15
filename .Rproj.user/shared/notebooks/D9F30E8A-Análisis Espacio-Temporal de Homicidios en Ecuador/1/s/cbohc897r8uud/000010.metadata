@@ -1,0 +1,1 @@
+{"height":247.2187886279357,"width":400.0,"dpi":-1.0,"size_behavior":0,"conditions":[[1,"\u001BG2;\u001BH2;Warning\u001Bh in scale_x_date() :\n  \u001B[38;5;254mA \u001B[34m<numeric>\u001B[38;5;254m value was passed to a \u001B[32mDate\u001B[38;5;254m scale.\n\u001B[36mℹ\u001B[38;5;254m The value was converted to a <Date> object.\u001B[39m\u001Bg\n"]]}
