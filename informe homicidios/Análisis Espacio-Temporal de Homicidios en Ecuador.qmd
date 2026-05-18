@@ -136,8 +136,7 @@ print(grafico_temporal)
 
 ## Análisis Espacio-Temporal
 
-El primer paso metodológico consistió en cuantificar la volatilidad espacial de cada evento violento. Basados en la teoría criminológica del contagio (\*Near-Repeat\*), se estableció una ventana espacio-temporal para detectar cuántos eventos subsecuentes fueron "detonados" por un homicidio inicial.
-Se definió un evento como "vecino próximo" si cumplía simultáneamente con las siguientes condiciones paramétricas:
+El primer paso metodológico consistió en cuantificar la volatilidad espacial de cada evento violento. Basados en la teoría criminológica del contagio (\*Near-Repeat\*), se estableció una ventana espacio-temporal para detectar cuántos eventos subsecuentes fueron "detonados" por un homicidio inicial. Se definió un evento como "vecino próximo" si cumplía simultáneamente con las siguientes condiciones paramétricas:
 
 - **Proximidad Espacial:** $\delta_s \le 500$ metros
 
