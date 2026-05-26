@@ -32,6 +32,8 @@ library(patchwork)
 library(osmdata)
 library(hms)
 library(knitr)
+library(tidyverse)
+library(spatstat)
 # --- PARÁMETROS CONFIGURABLES (Cambiar aquí para adaptar el análisis) ---
 crs_geo     <- 4326     # WGS84 (Latitud/Longitud ideal para mapas web)
 crs_proy    <- 32717    # UTM Zona 17S (Ideal para medir distancias en metros en Ecuador)
@@ -48,6 +50,55 @@ base_limpia <- base_limpia %>%
     LATITUD_Y = as.numeric(LATITUD_Y)
   ) %>%
   filter(!is.na(LONGITUD_X) & !is.na(LATITUD_Y))
+
+base_preparada <- base_limpia %>%
+  mutate(
+    DIA_MES = day(as.Date(FECHA)),
+    HORAS_ACUMULADAS = as.numeric(str_extract(as.character(HORA), "^[^:]+")),
+    MINUTOS_SEGUNDOS = str_extract(as.character(HORA), ":[0-9]{2}:[0-9]{2}.*$"),
+    MINUTOS_SEGUNDOS = str_remove(MINUTOS_SEGUNDOS, "^:")
+  ) %>%
+  mutate(
+    MINUTOS = as.numeric(str_extract(MINUTOS_SEGUNDOS, "^[0-9]{2}")),
+    SEGUNDOS = as.numeric(str_extract(MINUTOS_SEGUNDOS, "[0-9]{2}\\.[0-9]+$")),
+    TIEMPO_INDICE = HORAS_ACUMULADAS + (MINUTOS / 60) + (SEGUNDOS / 3600)
+  ) %>%
+  # Limpiamos las variables auxiliares para dejar la base impecable
+  select(-DIA_MES, -HORAS_ACUMULADAS, -MINUTOS_SEGUNDOS, -MINUTOS, -SEGUNDOS)
+```
+
+```{r}
+ventana_espacial <- owin(
+  xrange = range(base_preparada$LONGITUD_X, na.rm = TRUE), 
+  yrange = range(base_preparada$LATITUD_Y, na.rm = TRUE)
+)
+
+intervalo_temporal <- range(base_preparada$TIEMPO_INDICE, na.rm = TRUE)
+
+marcas_siniestros <- base_preparada %>%
+  select(
+    PROVINCIA, FERIADO, CAUSA_PROBABLE, TIPO_DE_SINIESTRO, # Categóricas
+    LESIONADOS, FALLECIDOS, SUMA_DE_VEHICULOS,            # Conteos
+    AUTOMOVIL, BICICLETA, BUS, CAMION, CAMIONETA, MOTOCICLETA # Vehículos (0/1 o conteo)
+  ) %>%
+  mutate(
+    across(c(PROVINCIA, FERIADO, CAUSA_PROBABLE, TIPO_DE_SINIESTRO), as.factor)
+  )
+
+proceso_transito <- pp3(
+  x = base_preparada$LONGITUD_X,
+  y = base_preparada$LATITUD_Y,
+  z = base_preparada$TIEMPO_INDICE, 
+  window = box3(
+    range(base_preparada$LONGITUD_X), 
+    range(base_preparada$LATITUD_Y), 
+    intervalo_temporal
+  ),
+  marks = marcas_siniestros 
+)
+
+print(proceso_transito)
+summary(proceso_transito)
 ```
 
 ## INTRODUCCIÓN
@@ -95,24 +146,54 @@ En Ecuador, los siniestros de tránsito constituyen una de las principales causa
 #### Nivel de provincia
 
 ```{r, code.fold=TRUE}
-tendencia_provincial<-base_limpia%>%
-  mutate(mes_año=floor_date(FECHA, "month"))%>%
-  group_by(PROVINCIA, mes_año)%>%
-  summarise(total_eventos=n(),.groups="drop")
+tendencia_provincial <- base_limpia %>%
+  mutate(mes_año = floor_date(FECHA, "month")) %>%
+  group_by(PROVINCIA, mes_año) %>%
+  summarise(total_eventos = n(), .groups = "drop") %>%
+  arrange(PROVINCIA, mes_año)
 
+tendencia_segmentos <- tendencia_provincial %>%
+  group_by(PROVINCIA) %>%
+  mutate(
+    # Coordenadas del punto Siguiente (destino del segmento)
+    mes_año_fin = lead(mes_año),
+    total_eventos_fin = lead(total_eventos),
+    
+    # Calculamos la pendiente o subida hacia el siguiente mes
+    subida = total_eventos_fin - total_eventos
+  ) %>%
+  mutate(
+    # Marcamos automáticamente como "Salto por anomalía" el segmento que tenga 
+    # la subida más grande de toda la historia de esa provincia específica
+    Tipo_Linea = if_else(subida == max(subida, na.rm = TRUE) & subida > 0, 
+                         "Salto por anomalía", 
+                         "Registro Normal")
+  ) %>%
+  filter(!is.na(mes_año_fin)) %>% # Eliminamos el último registro sin destino
+  ungroup()
 ```
 
 ```{r}
-ggplot(tendencia_provincial, aes(x = mes_año, y = total_eventos, color = PROVINCIA)) +
-  geom_line(size = 0.8) +
+ggplot(tendencia_segmentos, aes(color = PROVINCIA)) +
+  geom_segment(aes(x = mes_año, y = total_eventos, 
+                   xend = mes_año_fin, yend = total_eventos_fin, 
+                   linetype = Tipo_Linea), 
+               size = 0.8) +
   facet_wrap(~PROVINCIA, scales = "free_y") + 
   theme_minimal() +
-  theme(legend.position = "none", 
-        strip.text = element_text(face = "bold", size = 8),
-        axis.text.x = element_text(angle = 45, hjust = 1)) + 
-  labs(title = "Comportamiento Temporal de Eventos por Provincia",
-       x = "Fecha (Mes y Año)",
-       y = "Total de Homicidios")
+  scale_linetype_manual(values = c("Registro Normal" = "solid", "Salto por anomalía" = "dotted")) +
+  theme(
+    legend.position = "bottom", 
+    strip.text = element_text(face = "bold", size = 8),
+    axis.text.x = element_text(angle = 45, hjust = 1)
+  ) + 
+  labs(
+    title = "Comportamiento Temporal de Eventos por Provincia",
+    subtitle = "La línea punteada detecta y conecta automáticamente el mayor salto por falta de datos",
+    x = "Fecha (Mes y Año)",
+    y = "Total de Eventos de Tránsito",
+    linetype = "Tipo de Tramo:"
+  )
 ```
 
 #### Nivel Nacional
@@ -144,9 +225,9 @@ print(grafico_temporal)
 
 El primer paso metodológico consistió en cuantificar la volatilidad espacial de cada siniestro vial. Basados en el fenómeno de concentración espacio-temporal (*Near-Repeat* o repetición cercana), se estableció una ventana analítica para detectar cuántos eventos subsecuentes ocurrieron bajo el área de influencia geográfica y temporal de un accidente inicial. Se definió un siniestro como "vecino próximo" si cumplía simultáneamente con las siguientes condiciones paramétricas:
 
-- **Proximidad Espacial:** $\delta_s \le 300$ metros
+- **Proximidad Espacial:** $\delta_s \le 300$ metros, delimita el entorno micro-urbano de la vía (diseño de curvas, cruces, baches o falta de señalización), cuyo impacto en la accidentabilidad se disipa pasados los 300 metros. **Levine, N. (2006).**
 
-- **Proximidad temporal:** $0<\delta_t\le 7$ días.
+- **Proximidad temporal:** $0<\delta_t\le 7$ días, captura la estacionalidad semanal completa de la ciudad. Además luego de un siniestro, el contagio se disipa por completo después de una semana, devolviendo la vía a su riesgo histórico normal. **Johnson, S. D., & Bowers, K. J. (2004).**
 
 ```{r}
 base_con_vecinos <- readRDS("base_con_vecinos.rds")
@@ -207,4 +288,86 @@ $$d_{ij}=\min_{k}(dist(s_i,a_{jk}))$$
 
 ```{r}
 base_distancias<-readRDS("transito_utm.rds")
+```
+
+## Estudio de patrones de puntos espaciales
+
+### El proceso es ordenado? 
+
+```{r}
+hay_duplicados_3d <- any(duplicated(proceso_transito))
+print(paste("¿Hay puntos superpuestos en 3D?:", hay_duplicados_3d))
+
+
+```
+
+Se meterá un poco de ruido
+
+```{r}
+proceso_ordenado_3d <- proceso_transito
+
+if(hay_duplicados_3d) {
+  # Extraemos las coordenadas (X, Y, T)
+  coords_3d <- coords(proceso_transito)
+  
+  # Añadimos un ruido imperceptible (jitter manual) para romper el empate
+  # Un ruido de pocos centímetros en X, Y y milésimas de hora en T
+  coords_3d$x <- coords_3d$x + rnorm(nrow(coords_3d), mean = 0, sd = 0.00001)
+  coords_3d$y <- coords_3d$y + rnorm(nrow(coords_3d), mean = 0, sd = 0.00001)
+  coords_3d$z <- coords_3d$z + rnorm(nrow(coords_3d), mean = 0, sd = 0.00001)
+  
+  # Reconstruimos el objeto pp3 ordenado
+  proceso_ordenado_3d <- pp3(
+    x = coords_3d$x, y = coords_3d$y, z = coords_3d$z,
+    window = domain(proceso_transito),
+    marks = marks(proceso_transito)
+  )
+}
+```
+
+### El proceso es Homogéneo?
+
+#### Prueba de Cuadrantes Espacio Temporal
+
+```{r}
+library(stpp)
+X <- base_preparada$LONGITUD_X
+Y <- base_preparada$LATITUD_Y
+T_indice <- base_preparada$TIEMPO_INDICE
+
+limites_x <- range(X, na.rm = TRUE)
+limites_y <- range(Y, na.rm = TRUE)
+limites_t <- range(T_indice, na.rm = TRUE)
+
+# Dividimos el volumen en una rejilla cúbica de 3x3x3 (27 sub-volúmenes de igual tamaño)
+cortes_x <- cut(X, breaks = seq(limites_x[1], limites_x[2], length.out = 4), include.lowest = TRUE)
+cortes_y <- cut(Y, breaks = seq(limites_y[1], limites_y[2], length.out = 4), include.lowest = TRUE)
+cortes_t <- cut(T_indice, breaks = seq(limites_t[1], limites_t[2], length.out = 4), include.lowest = TRUE)
+
+# Construimos la tabla de frecuencias observadas en cada uno de los 27 cubos
+frecuencias_observadas <- as.vector(table(cortes_x, cortes_y, cortes_t))
+
+# Bajo la hipótesis nula de homogeneidad (ST-CSR), calculamos el valor esperado
+total_puntos <- length(X)
+valor_esperado <- rep(total_puntos / 27, 27)
+
+# Estadístico Chi-cuadrado para el contraste de hipótesis
+estadistico_chi2 <- sum((frecuencias_observadas - valor_esperado)^2 / valor_esperado)
+
+# Grados de libertad: K categorías - 1 (27 cubos - 1)
+grados_libertad <- 26
+p_valor_st <- pchisq(estadistico_chi2, df = grados_libertad, lower.tail = FALSE)
+
+
+cat("--- CONTRASATE DE HOMOGENEIDAD ESPACIO-TEMPORAL (CSR) ---\n")
+cat("P-valor de la prueba:", p_valor_st, "\n")
+
+```
+
+Se rechaza la hipotesis nula que sea CSR, por ende tampoco es homogéneo.
+
+### Análisis con las K-funciones
+
+```{r}
+
 ```

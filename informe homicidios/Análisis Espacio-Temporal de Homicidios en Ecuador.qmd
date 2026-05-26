@@ -200,8 +200,6 @@ Se calculó la distancia euclidiana exacta en metros ($d$) entre cada evento $h_
 
 $$d_{ij}=\min_{k}(dist(h_i,a_{jk}))$$
 
-Esta operación generó una base de datos ampliada donde cada homicidio está asociado a la distancia a la farmacia, bar, banco o estación de policía más próxima.
-
 ```{r}
 base_distancias <- readRDS("base_distancias.rds")
 ```

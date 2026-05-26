@@ -1,0 +1,77 @@
+library(tidyverse)
+library(lubridate)
+
+# 1. Definir los criterios adaptativos por tipo de siniestro (Proxy del entorno vial)
+base_adaptativa <- base_preparada %>%
+  mutate(
+    # Asignación dinámica de Delta Espacial (en metros)
+    delta_s = case_when(
+      TIPO_DE_SINIESTRO %in% c("CHOQUE FRONTAL", "VOLCAMIENTO", "ESTRELLAMIENTO") ~ 600, # Vías rápidas
+      TIPO_DE_SINIESTRO %in% c("ATROPELLO", "ROZAMIENTO") ~ 200,                         # Calles residenciales
+      TRUE ~ 300                                                                         # Estándar/Otros
+    ),
+    
+    # Asignación dinámica de Delta Temporal (convertido a HORAS para el TIEMPO_INDICE)
+    # Recuerda que nuestro TIEMPO_INDICE está calculado en horas.
+    delta_t = case_when(
+      TIPO_DE_SINIESTRO %in% c("CHOQUE FRONTAL", "VOLCAMIENTO", "ESTRELLAMIENTO") ~ 7 * 24, # 7 días en horas
+      TIPO_DE_SINIESTRO %in% c("ATROPELLO", "ROZAMIENTO") ~ 2 * 24,                         # 2 días en horas (memoria corta)
+      TRUE ~ 5 * 24                                                                         # 5 días en horas
+    )
+  )
+
+# 2. Factor de conversión de coordenadas a metros (Aproximación en el Ecuador)
+# En la zona ecuatorial (Quito/Ecuador), 1 grado de latitud/longitud equivale aproximadamente a 111,000 metros.
+# Esto nos permite evaluar distancias euclidianas directamente sobre las coordenadas geográficas.
+METROS_POR_GRADO <- 111000
+
+# 3. Función para identificar los "Vecinos Próximos" usando las ventanas adaptativas
+# OJO: Debido al tamaño de tu base (194k puntos), evaluar una matriz de pares completa (N x N) 
+# colapsaría la memoria de R. Optimizamos usando un bucle indexado por fila para un subconjunto,
+# o una muestra si quieres probar la lógica primero.
+
+encontrar_vecinos_adaptativos <- function(data, fila_index) {
+  # Extraer el siniestro de referencia (accidente inicial)
+  accidente_i <- data[fila_index, ]
+  
+  # Filtrar candidatos potenciales que cumplan con la ventana temporal adaptativa de 'i'
+  # El evento posterior 'j' debe ocurrir DESPUÉS de 'i' (0 < dt <= delta_t)
+  candidatos <- data %>%
+    filter(
+      TIEMPO_INDICE > accidente_i$TIEMPO_INDICE,
+      TIEMPO_INDICE <= (accidente_i$TIEMPO_INDICE + accidente_i$delta_t)
+    )
+  
+  if (nrow(candidatos) == 0) return(0) # Si no hay eventos en ese rango de tiempo, retorna 0
+  
+  # Calcular la distancia espacial euclidiana aproximada en metros para los candidatos
+  candidatos <- candidatos %>%
+    mutate(
+      distancia_metros = sqrt(
+        (LONGITUD_X - accidente_i$LONGITUD_X)^2 + 
+        (LATITUD_Y - accidente_i$LATITUD_Y)^2
+      ) * METROS_POR_GRADO
+    ) %>%
+    # Filtrar si el candidato cae dentro del radio espacial adaptativo del accidente inicial
+    filter(distancia_metros <= accidente_i$delta_s)
+  
+  # Retorna el conteo de réplicas (Near-Repeats) gatilladas por el accidente 'i'
+  return(nrow(candidatos))
+}
+
+# 4. Aplicación del análisis (Ejemplo demostrativo con los primeros 1000 registros para validar)
+# Puedes escalarlo a toda la base si cuentas con buena capacidad de cómputo.
+base_test <- base_adaptativa %>% head(1000)
+
+recuentos <- sapply(1:nrow(base_test), function(i) {
+  encontrar_vecinos_adaptativos(base_test, i)
+})
+
+# Añadir el resultado a la tabla
+base_test$REPLICAS_ADAPTATIVAS <- recuentos
+
+# Revisar los siniestros que más réplicas generaron bajo el enfoque adaptativo
+base_test %>% 
+  select(PROVINCIA, TIPO_DE_SINIESTRO, delta_s, delta_t, REPLICAS_ADAPTATIVAS) %>% 
+  arrange(desc(REPLICAS_ADAPTATIVAS)) %>% 
+  head(10)

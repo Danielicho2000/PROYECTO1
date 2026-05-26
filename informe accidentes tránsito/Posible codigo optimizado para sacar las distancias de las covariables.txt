@@ -1,0 +1,52 @@
+library(tidyverse)
+library(sf)
+
+# 1. Asegurar que las amenidades tengan coordenadas UTM limpias en formato matriz
+coords_amenidades <- st_coordinates(amenidades_utm)
+amenidades_df <- amenidades_utm %>%
+  mutate(
+    X = coords_amenidades[, 1],
+    Y = coords_amenidades[, 2]
+  ) %>%
+  st_drop_geometry()
+
+# 2. Extraer las coordenadas del tránsito como una matriz limpia (operación ultra rápida)
+coords_transito <- st_coordinates(transito_utm)
+X_transito <- coords_transito[, 1]
+Y_transito <- coords_transito[, 2]
+
+# 3. Lista de tipos de amenidad
+tipos_amenidad <- unique(amenidades_df$amenity)
+
+# Creamos una lista para almacenar las nuevas columnas numéricas de golpe
+nuevas_columnas <- list()
+
+# 4. Bucle optimizado (operaciones matriciales vectorizadas, no geométricas)
+for (tipo_actual in tipos_amenidad) {
+  
+  # Filtrar la matriz de la amenidad actual (mucho más rápido que filtrar un sf)
+  puntos_sub <- amenidades_df %>% filter(amenity == tipo_actual)
+  
+  # Usamos st_nearest_feature sobre matrices/puntos planos indexados
+  # Al pasarle un objeto sf optimizado de menor tamaño, el motor GEOS vuela
+  puntos_sub_sf <- st_as_sf(puntos_sub, coords = c("X", "Y"), crs = crs_proy)
+  
+  # Encuentra los índices más cercanos de forma masiva
+  idx_cercano <- st_nearest_feature(transito_utm, puntos_sub_sf)
+  
+  # PASO CLAVE OPTIMIZADO: Evitamos 'st_distance(by_element = TRUE)' que recrea geometrías internas.
+  # Calculamos la distancia euclidiana directa en el plano UTM usando Pitágoras elemental.
+  # Al estar en UTM (metros), sqrt((x1-x2)^2 + (y1-y2)^2) es matemáticamente idéntico y 100 veces más rápido.
+  dist_metros <- sqrt(
+    (X_transito - puntos_sub$X[idx_cercano])^2 + 
+    (Y_transito - puntos_sub$Y[idx_cercano])^2
+  )
+  
+  # Guardamos el resultado directamente en kilómetros
+  nombre_columna <- paste0("dist_", tipo_actual, "_km")
+  nuevas_columnas[[nombre_columna]] <- dist_metros * 0.001
+}
+
+# 5. Acoplamos todas las nuevas columnas de una sola vez al objeto original
+# Esto evita la fragmentación de memoria que ocurre al añadir columnas una por una dentro del bucle
+transito_optimizado <- bind_cols(transito_utm, as_tibble(nuevas_columnas))
