@@ -12,7 +12,7 @@ format:
     number-sections: true
     self-contained: true
 execute:
-  echo: true
+  echo: false
   warning: false
   message: false
 editor: visual
@@ -31,6 +31,8 @@ library(rnaturalearth)
 library(osmdata)
 library(changepoint)
 library(knitr)
+library(stringr)
+library(spatstat)
 
 # --- PARÁMETROS CONFIGURABLES (Cambiar aquí para adaptar el análisis) ---
 crs_geo     <- 4326     # WGS84 (Latitud/Longitud ideal para mapas web)
@@ -43,6 +45,50 @@ buffer_pico <- 400      # Metros de radio para extraer amenidades en zonas crít
 # ========================================================================
 # Limpieza y filtrado espacial
 base_limpia <- readRDS("base_original.rds")
+```
+
+```{r}
+base_preparada <- base_limpia %>%
+  mutate(
+    DIA_MES = day(as.Date(fecha_infraccion)),
+    HORAS_ACUMULADAS = as.numeric(str_extract(as.character(hora_infraccion), "^[^:]+")),
+    MINUTOS_SEGUNDOS = str_extract(as.character(hora_infraccion), ":[0-9]{2}:[0-9]{2}.*$"),
+    MINUTOS_SEGUNDOS = str_remove(MINUTOS_SEGUNDOS, "^:")
+  ) %>%
+  mutate(
+    MINUTOS = as.numeric(str_extract(MINUTOS_SEGUNDOS, "^[0-9]{2}")),
+    SEGUNDOS = as.numeric(str_extract(MINUTOS_SEGUNDOS, "[0-9]{2}$|[0-9]{2}\\.[0-9]+$")),
+    
+    TIEMPO_INDICE = HORAS_ACUMULADAS + (MINUTOS / 60) + (SEGUNDOS / 3600)
+  ) %>%
+  select(-DIA_MES, -HORAS_ACUMULADAS, -MINUTOS_SEGUNDOS, -MINUTOS, -SEGUNDOS)
+```
+
+```{r}
+ventana_espacial <- owin(
+  xrange = range(base_preparada$longitud, na.rm = TRUE), 
+  yrange = range(base_preparada$latitud, na.rm = TRUE)
+)
+
+# 2. Preparar las marcas (atributos de los homicidios)
+marcas_homicidios <- base_preparada %>%
+  select(
+    provincia, canton, tipo_muerte, arma, 
+    presunta_motivacion, lugar, sexo, # Variables categóricas
+    edad                              # Variable numérica
+  ) %>%
+  mutate(
+    # Convertimos las variables cualitativas a factor
+    across(c(provincia, canton, tipo_muerte, arma, presunta_motivacion, lugar, sexo), as.factor)
+  )
+
+# 3. Crear el proceso de puntos espacial (ppp)
+proceso_homicidios <- ppp(
+  x = base_preparada$longitud,
+  y = base_preparada$latitud,
+  window = ventana_espacial, 
+  marks = marcas_homicidios 
+)
 ```
 
 ## INTRODUCCIÓN
@@ -81,6 +127,11 @@ El presente análisis se fundamenta en los registros oficiales de Homicidios Int
 
     - Características sociodemográficas: edad, sexo, genero, etnia, estado_civil, nacionalidad, instruccion, discapacidad y profesion_registro_civil
 
+```{r}
+print(proceso_homicidios)
+summary(proceso_homicidios)
+```
+
 ## Datos
 
 ### Ocurrencia de los datos
@@ -91,47 +142,97 @@ El presente análisis se fundamenta en los registros oficiales de Homicidios Int
 tendencia_provincial <- base_limpia %>%
   mutate(mes_año = floor_date(fecha_infraccion, "month")) %>% 
   group_by(provincia, mes_año) %>%
-  summarise(total_eventos = n(), .groups = 'drop')
+  summarise(total_eventos = n(), .groups = "drop") %>%
+  arrange(provincia, mes_año)
+
+tendencia_segmentos <- tendencia_provincial %>%
+  group_by(provincia) %>%
+  mutate(
+    # Coordenadas del punto Siguiente (destino del segmento)
+    mes_año_fin = lead(mes_año),
+    total_eventos_fin = lead(total_eventos),
+    
+    # Calculamos la pendiente o subida hacia el siguiente mes
+    subida = total_eventos_fin - total_eventos
+  ) %>%
+  mutate(
+    Tipo_Linea = if_else(subida == max(subida, na.rm = TRUE) & subida > 0, 
+                         "Salto por anomalía", 
+                         "Registro Normal")
+  ) %>%
+  filter(!is.na(mes_año_fin)) %>% # Eliminamos el último registro sin destino
+  ungroup()
 
 ```
 
 ```{r, echo=FALSE}
-ggplot(tendencia_provincial, aes(x = mes_año, y = total_eventos, color = provincia)) +
-  geom_line(size = 0.8) +
+ggplot(tendencia_segmentos, aes(color = provincia)) +
+  geom_segment(aes(x = mes_año, y = total_eventos, 
+                   xend = mes_año_fin, yend = total_eventos_fin, 
+                   linetype = Tipo_Linea), 
+               linewidth = 0.8) + # Usamos linewidth en lugar de size (actualización de ggplot2)
   facet_wrap(~provincia, scales = "free_y") + 
   theme_minimal() +
-  theme(legend.position = "none", 
-        strip.text = element_text(face = "bold", size = 8),
-        axis.text.x = element_text(angle = 45, hjust = 1)) + 
-  labs(title = "Comportamiento Temporal de Eventos por Provincia",
-       x = "Fecha (Mes y Año)",
-       y = "Total de Homicidios")
+  scale_linetype_manual(values = c("Registro Normal" = "solid", "Salto por anomalía" = "dotted")) +
+  theme(
+    legend.position = "bottom", 
+    strip.text = element_text(face = "bold", size = 8),
+    axis.text.x = element_text(angle = 45, hjust = 1)
+  ) + 
+  labs(
+    title = "Comportamiento Temporal de Homicidios por Provincia",
+    subtitle = "La línea punteada detecta y conecta automáticamente el mayor salto en los registros",
+    x = "Fecha (Mes y Año)",
+    y = "Total de Homicidios",
+    linetype = "Tipo de Tramo:"
+  )
 ```
 
 #### Nivel Nacional
 
 ```{r}
-conteo_mensual <- base_limpia %>%
+conteo_mensual_segmentos <- base_limpia %>%
   mutate(mes_año = floor_date(fecha_infraccion, "month")) %>% 
   group_by(mes_año) %>%
-  summarise(total_eventos = n(), .groups = 'drop')
+  summarise(total_eventos = n(), .groups = 'drop') %>%
+  arrange(mes_año) %>%
+  mutate(
+    mes_año_fin = lead(mes_año),
+    total_eventos_fin = lead(total_eventos),
+    subida = total_eventos_fin - total_eventos,
+    Tipo_Linea = if_else(subida == max(subida, na.rm = TRUE) & subida > 0, 
+                         "Salto por anomalía", 
+                         "Registro Normal")
+  ) %>%
+  filter(!is.na(mes_año_fin))
 
 
 ```
 
 ```{r,echo=FALSE}
-grafico_temporal <- ggplot(conteo_mensual, aes(x = mes_año, y = total_eventos)) +
-  geom_line(color = "steelblue", size = 1) +
-  geom_point(color = "darkblue", size = 1.5) +
+grafico_temporal_global <- ggplot(conteo_mensual_segmentos) +
+  # Dibujamos los segmentos con la condición del salto
+  geom_segment(aes(x = mes_año, y = total_eventos, 
+                   xend = mes_año_fin, yend = total_eventos_fin, 
+                   linetype = Tipo_Linea), 
+               color = "steelblue", linewidth = 1) +
+  # Agregamos los puntos
+  geom_point(aes(x = mes_año, y = total_eventos), color = "darkblue", size = 1.5) +
+  # Tu línea roja de validación
   geom_vline(xintercept = as.numeric(as.Date("2026-01-01")), 
-             linetype = "dashed", color = "red", size = 1) +
-  labs(title = "Evolución Mensual de Homicidios (2014 - 2026)",
-       subtitle = "Validación de empalme entre bases históricas y recientes",
-       x = "Mes y Año",
-       y = "Total de Homicidios Mensuales") +
-  theme_minimal()
+             linetype = "dashed", color = "red", linewidth = 1) +
+  scale_linetype_manual(values = c("Registro Normal" = "solid", "Salto por anomalía" = "dotted")) +
+  theme_minimal() +
+  theme(legend.position = "bottom") +
+  labs(
+    title = "Evolución Mensual de Homicidios (2014 - 2026)",
+    subtitle = "Validación de empalme entre bases históricas y recientes",
+    x = "Mes y Año",
+    y = "Total de Homicidios Mensuales",
+    linetype = "Tipo de Tramo:"
+  )
 
-print(grafico_temporal)
+print(grafico_temporal_global)
 ```
 
 ## Análisis Espacio-Temporal
@@ -203,3 +304,90 @@ $$d_{ij}=\min_{k}(dist(h_i,a_{jk}))$$
 ```{r}
 base_distancias <- readRDS("base_distancias.rds")
 ```
+
+## Estudio de patrones de puntos espaciales
+
+### El proceso es ordenado?
+
+```{r}
+hay_duplicados_2d <- any(duplicated(proceso_homicidios))
+print(paste("¿Hay puntos superpuestos en 2D?:", hay_duplicados_2d))
+```
+
+Se meterá un poco de ruido.
+
+```{r}
+proceso_ordenado_2d <- proceso_homicidios
+
+if(hay_duplicados_2d) {
+  # Extraemos únicamente las coordenadas espaciales (X, Y)
+  coords_2d <- coords(proceso_homicidios)
+  
+  # Añadimos un ruido espacial imperceptible (jitter manual) para separar los puntos.
+  # El sd de 0.00001 asume que estás en grados decimales (aprox. 1 metro).
+  coords_2d$x <- coords_2d$x + rnorm(nrow(coords_2d), mean = 0, sd = 0.00001)
+  coords_2d$y <- coords_2d$y + rnorm(nrow(coords_2d), mean = 0, sd = 0.00001)
+  
+  # Reconstruimos el objeto ppp (espacial 2D) con las nuevas coordenadas
+  proceso_ordenado_2d <- ppp(
+    x = coords_2d$x, 
+    y = coords_2d$y,
+    window = Window(proceso_homicidios), # Usamos Window() para extraer la ventana 2D
+    marks = marks(proceso_homicidios)
+  )
+}
+```
+
+### El proceso es Homogéneo?
+
+#### Prueba de Cuadrantes Espacio Temporal
+
+```{r}
+library(stpp)
+X <- as.numeric(base_preparada$longitud)
+Y <- as.numeric(base_preparada$latitud)
+
+
+limites_x <- range(X, na.rm = TRUE)
+limites_y <- range(Y, na.rm = TRUE)
+
+
+# Dividimos el volumen en una rejilla cúbica de 3x3 (0 sub-volúmenes de igual tamaño)
+cortes_x <- cut(X, breaks = seq(limites_x[1], limites_x[2], length.out = 4), include.lowest = TRUE)
+cortes_y <- cut(Y, breaks = seq(limites_y[1], limites_y[2], length.out = 4), include.lowest = TRUE)
+
+
+# Construimos la tabla de frecuencias observadas en cada uno de los 0 cubos
+frecuencias_observadas <- as.vector(table(cortes_x, cortes_y))
+
+# Bajo la hipótesis nula de homogeneidad (ST-CSR), calculamos el valor esperado
+total_puntos <- length(X)
+valor_esperado <- rep(total_puntos / 9, 9)
+
+# Estadístico Chi-cuadrado para el contraste de hipótesis
+estadistico_chi2 <- sum((frecuencias_observadas - valor_esperado)^2 / valor_esperado)
+
+# Grados de libertad: K categorías - 1 (0 cubos - 1)
+grados_libertad <- 8
+p_valor_st <- pchisq(estadistico_chi2, df = grados_libertad, lower.tail = FALSE)
+
+
+cat("--- CONTRASATE DE HOMOGENEIDAD ESPACIO-TEMPORAL (CSR) ---\n")
+cat("P-valor de la prueba:", p_valor_st, "\n")
+```
+
+Se rechaza la hipotesis nula que sea CSR, por ende tampoco es homogéneo.
+
+### Análisis con las K-funciones
+
+```{r}
+k_transito <- Kest(proceso_ordenado_2d)
+
+# Visualizamos el resultado
+plot(k_transito, 
+     main = "Función K de Ripley - Homicidios",
+     xlab = "Distancia (r)", 
+     ylab = "K(r)")
+```
+
+Esto confirma estadísticamente que los homicidios no ocurren al azar. No se distribuyen de manera uniforme (como si cayeran gotas de lluvia aleatorias sobre el mapa), sino que existen zonas con una alta concentración de eventos (puntos calientes o *hotspots*).

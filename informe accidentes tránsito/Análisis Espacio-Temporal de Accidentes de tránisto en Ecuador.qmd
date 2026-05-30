@@ -73,32 +73,23 @@ ventana_espacial <- owin(
   yrange = range(base_preparada$LATITUD_Y, na.rm = TRUE)
 )
 
-intervalo_temporal <- range(base_preparada$TIEMPO_INDICE, na.rm = TRUE)
 
 marcas_siniestros <- base_preparada %>%
   select(
     PROVINCIA, FERIADO, CAUSA_PROBABLE, TIPO_DE_SINIESTRO, # Categóricas
-    LESIONADOS, FALLECIDOS, SUMA_DE_VEHICULOS,            # Conteos
+    LESIONADOS, FALLECIDOS, SUMA_DE_VEHICULOS,             # Conteos
     AUTOMOVIL, BICICLETA, BUS, CAMION, CAMIONETA, MOTOCICLETA # Vehículos (0/1 o conteo)
   ) %>%
   mutate(
     across(c(PROVINCIA, FERIADO, CAUSA_PROBABLE, TIPO_DE_SINIESTRO), as.factor)
   )
 
-proceso_transito <- pp3(
+proceso_transito <- ppp(
   x = base_preparada$LONGITUD_X,
   y = base_preparada$LATITUD_Y,
-  z = base_preparada$TIEMPO_INDICE, 
-  window = box3(
-    range(base_preparada$LONGITUD_X), 
-    range(base_preparada$LATITUD_Y), 
-    intervalo_temporal
-  ),
+  window = ventana_espacial, # Usamos la ventana bidimensional directamente
   marks = marcas_siniestros 
 )
-
-print(proceso_transito)
-summary(proceso_transito)
 ```
 
 ## INTRODUCCIÓN
@@ -138,6 +129,11 @@ En Ecuador, los siniestros de tránsito constituyen una de las principales causa
     - **Volumen de Involucrados:** SUMA_DE_VEHICULOS
 
     - **Tipología Vehicular:** AUTOMOVIL, BICICLETA, BUS, CAMION, CAMIONETA, MOTOCICLETA
+
+```{r}
+print(proceso_transito)
+summary(proceso_transito)
+```
 
 ## Datos
 
@@ -292,11 +288,11 @@ base_distancias<-readRDS("transito_utm.rds")
 
 ## Estudio de patrones de puntos espaciales
 
-### El proceso es ordenado? 
+### El proceso es ordenado?
 
 ```{r}
-hay_duplicados_3d <- any(duplicated(proceso_transito))
-print(paste("¿Hay puntos superpuestos en 3D?:", hay_duplicados_3d))
+hay_duplicados_2d <- any(duplicated(proceso_transito))
+print(paste("¿Hay puntos superpuestos en 2D?:", hay_duplicados_2d))
 
 
 ```
@@ -304,22 +300,22 @@ print(paste("¿Hay puntos superpuestos en 3D?:", hay_duplicados_3d))
 Se meterá un poco de ruido
 
 ```{r}
-proceso_ordenado_3d <- proceso_transito
+proceso_ordenado_2d <- proceso_transito
 
-if(hay_duplicados_3d) {
-  # Extraemos las coordenadas (X, Y, T)
-  coords_3d <- coords(proceso_transito)
+if(hay_duplicados_2d) {
+  # Extraemos únicamente las coordenadas espaciales (X, Y)
+  coords_2d <- coords(proceso_transito)
   
-  # Añadimos un ruido imperceptible (jitter manual) para romper el empate
-  # Un ruido de pocos centímetros en X, Y y milésimas de hora en T
-  coords_3d$x <- coords_3d$x + rnorm(nrow(coords_3d), mean = 0, sd = 0.00001)
-  coords_3d$y <- coords_3d$y + rnorm(nrow(coords_3d), mean = 0, sd = 0.00001)
-  coords_3d$z <- coords_3d$z + rnorm(nrow(coords_3d), mean = 0, sd = 0.00001)
+  # Añadimos un ruido espacial imperceptible (jitter manual) para separar los puntos.
+  # El sd de 0.00001 asume que estás en grados decimales (aprox. 1 metro).
+  coords_2d$x <- coords_2d$x + rnorm(nrow(coords_2d), mean = 0, sd = 0.00001)
+  coords_2d$y <- coords_2d$y + rnorm(nrow(coords_2d), mean = 0, sd = 0.00001)
   
-  # Reconstruimos el objeto pp3 ordenado
-  proceso_ordenado_3d <- pp3(
-    x = coords_3d$x, y = coords_3d$y, z = coords_3d$z,
-    window = domain(proceso_transito),
+  # Reconstruimos el objeto ppp (espacial 2D) con las nuevas coordenadas
+  proceso_ordenado_2d <- ppp(
+    x = coords_2d$x, 
+    y = coords_2d$y,
+    window = Window(proceso_transito), # Usamos Window() para extraer la ventana 2D
     marks = marks(proceso_transito)
   )
 }
@@ -333,29 +329,29 @@ if(hay_duplicados_3d) {
 library(stpp)
 X <- base_preparada$LONGITUD_X
 Y <- base_preparada$LATITUD_Y
-T_indice <- base_preparada$TIEMPO_INDICE
+
 
 limites_x <- range(X, na.rm = TRUE)
 limites_y <- range(Y, na.rm = TRUE)
-limites_t <- range(T_indice, na.rm = TRUE)
+
 
 # Dividimos el volumen en una rejilla cúbica de 3x3x3 (27 sub-volúmenes de igual tamaño)
 cortes_x <- cut(X, breaks = seq(limites_x[1], limites_x[2], length.out = 4), include.lowest = TRUE)
 cortes_y <- cut(Y, breaks = seq(limites_y[1], limites_y[2], length.out = 4), include.lowest = TRUE)
-cortes_t <- cut(T_indice, breaks = seq(limites_t[1], limites_t[2], length.out = 4), include.lowest = TRUE)
 
-# Construimos la tabla de frecuencias observadas en cada uno de los 27 cubos
-frecuencias_observadas <- as.vector(table(cortes_x, cortes_y, cortes_t))
+
+# Construimos la tabla de frecuencias observadas en cada uno de los 9 cubos
+frecuencias_observadas <- as.vector(table(cortes_x, cortes_y))
 
 # Bajo la hipótesis nula de homogeneidad (ST-CSR), calculamos el valor esperado
 total_puntos <- length(X)
-valor_esperado <- rep(total_puntos / 27, 27)
+valor_esperado <- rep(total_puntos /9, 9)
 
 # Estadístico Chi-cuadrado para el contraste de hipótesis
 estadistico_chi2 <- sum((frecuencias_observadas - valor_esperado)^2 / valor_esperado)
 
-# Grados de libertad: K categorías - 1 (27 cubos - 1)
-grados_libertad <- 26
+# Grados de libertad: K categorías - 1 (9 cubos - 1)
+grados_libertad <- 8
 p_valor_st <- pchisq(estadistico_chi2, df = grados_libertad, lower.tail = FALSE)
 
 
@@ -369,5 +365,13 @@ Se rechaza la hipotesis nula que sea CSR, por ende tampoco es homogéneo.
 ### Análisis con las K-funciones
 
 ```{r}
+k_transito <- Kest(proceso_ordenado_2d)
 
+# Visualizamos el resultado
+plot(k_transito, 
+     main = "Función K de Ripley - Siniestros de Tránsito",
+     xlab = "Distancia (r)", 
+     ylab = "K(r)")
 ```
+
+Existe un agrupamiento de los datos (clustering).Los siniestros de tránsito no ocurren en medio de lagos, montañas o dentro de edificios; ocurren exclusivamente sobre la red vial, y tienden a acumularse en intersecciones peligrosas, rotondas o avenidas principales de alto tráfico.
