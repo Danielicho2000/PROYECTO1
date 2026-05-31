@@ -182,17 +182,12 @@ base_para_mapa <- base_con_vecinos %>%
 
 # Construcción del Mapa
 mapa_completo <- leaflet(base_para_mapa) %>%
-  addProviderTiles(providers$CartoDB.DarkMatter) %>% # Fondo oscuro resalta el calor
-  
-  # CAPA 1: Mapa de Calor Puro (Sin ponderar por vecinos)
+  addProviderTiles(providers$CartoDB.DarkMatter) %>% 
   addHeatmap(
     lng = ~lng_map, lat = ~lat_map,
-    # Eliminamos el parámetro 'intensity' para que sea un heatmap clásico
-    blur = 15, radius = 10, max = 0.5, # Ajusta 'max' para cambiar la sensibilidad térmica
+    blur = 15, radius = 10, max = 0.5, 
     group = "Calor: Homicidios"
   ) %>%
-  
-  # CAPA 2: Puntos Exactos de los Eventos
   addCircleMarkers(
     lng = ~lng_map, lat = ~lat_map,
     radius = 4,
@@ -202,18 +197,15 @@ mapa_completo <- leaflet(base_para_mapa) %>%
     popup = ~paste("<b>Fecha:</b>", fecha_infraccion, "<br>",
                    "<b>Motivación:</b>", presunta_motivacion, "<br>",
                    "<b>Distrito:</b>", distrito),
-    clusterOptions = markerClusterOptions(), # ¡Clave para no congelar la PC!
+    clusterOptions = markerClusterOptions(), 
     group = "Puntos: Homicidios"
   ) %>%
   
   # CONTROL DE CAPAS
   addLayersControl(
-    # Usamos baseGroups si quieres alternar entre ver Calor o Puntos, 
-    # o overlayGroups si quieres ver ambos encendidos/apagados a voluntad.
     overlayGroups = c("Calor: Homicidios", "Puntos: Homicidios"),
     options = layersControlOptions(collapsed = FALSE)
   ) %>%
-  # Esconder los puntos por defecto para que el mapa cargue mostrando solo el calor
   hideGroup("Puntos: Homicidios") 
 
 mapa_completo
