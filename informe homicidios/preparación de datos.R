@@ -172,58 +172,55 @@ saveRDS(base_distancias,"base_distancias.rds")
 # =============================================================================
 # 6. MAPA DE CALOR DE LOS HOMICIDIOS
 # =============================================================================
+base_con_vecinos<-readRDS("base_con_vecinos.rds")
 base_para_mapa <- base_con_vecinos %>%
   mutate(
     lng_map = st_coordinates(.)[,1],  
     lat_map = st_coordinates(.)[,2]   
   ) %>%
   st_drop_geometry()
-amenidades_geo <- covariables_utm %>% 
-  st_transform(4326) %>%
-  mutate(
-    lng = st_coordinates(.)[,1],
-    lat = st_coordinates(.)[,2]
-  )
 
-tipos <- unique(amenidades_geo$amenity)
-pal_amenity <- colorFactor(palette = "viridis", domain = tipos)
-
-#  Construcción del Mapa
-mapa_completo <- leaflet() %>%
+# Construcción del Mapa
+mapa_completo <- leaflet(base_para_mapa) %>%
   addProviderTiles(providers$CartoDB.DarkMatter) %>% # Fondo oscuro resalta el calor
   
-  # CAPA 1: Mapa de Calor (Homicidios)
+  # CAPA 1: Mapa de Calor Puro (Sin ponderar por vecinos)
   addHeatmap(
-    data = base_para_mapa,
     lng = ~lng_map, lat = ~lat_map,
-    intensity = ~n_vecinos_proximos, #justo aquí se mide la intensidad
-    blur = 5, radius = 10,
+    # Eliminamos el parámetro 'intensity' para que sea un heatmap clásico
+    blur = 15, radius = 10, max = 0.5, # Ajusta 'max' para cambiar la sensibilidad térmica
     group = "Calor: Homicidios"
   ) %>%
   
-  # CAPA 2: Puntos de Amenidades 
+  # CAPA 2: Puntos Exactos de los Eventos
   addCircleMarkers(
-    data = amenidades_geo,
-    lng = ~lng, lat = ~lat,
-    color = ~pal_amenity(amenity),
-    radius = 3,
-    stroke = FALSE, fillOpacity = 0.7,
-    label = ~paste("Categoría:", amenity),
-    clusterOptions = markerClusterOptions(), # clusteriza por zoom al mapa y distancia
-    group = "Amenidades (Puntos)"
+    lng = ~lng_map, lat = ~lat_map,
+    radius = 4,
+    color = "#ff4500", # Color naranja/rojo fuego
+    stroke = FALSE, fillOpacity = 0.6,
+    # Un popup interactivo para ver detalles al hacer clic
+    popup = ~paste("<b>Fecha:</b>", fecha_infraccion, "<br>",
+                   "<b>Motivación:</b>", presunta_motivacion, "<br>",
+                   "<b>Distrito:</b>", distrito),
+    clusterOptions = markerClusterOptions(), # ¡Clave para no congelar la PC!
+    group = "Puntos: Homicidios"
   ) %>%
   
   # CONTROL DE CAPAS
   addLayersControl(
-    overlayGroups = c("Calor: Homicidios", "Amenidades (Puntos)"),
+    # Usamos baseGroups si quieres alternar entre ver Calor o Puntos, 
+    # o overlayGroups si quieres ver ambos encendidos/apagados a voluntad.
+    overlayGroups = c("Calor: Homicidios", "Puntos: Homicidios"),
     options = layersControlOptions(collapsed = FALSE)
-  )
+  ) %>%
+  # Esconder los puntos por defecto para que el mapa cargue mostrando solo el calor
+  hideGroup("Puntos: Homicidios") 
 
 mapa_completo
 
-#El mapa trabaja con la intensidad de vecinos alrededor
+# Guardar el widget
 saveWidget(
   widget = mapa_completo, 
-  file = "mapa_homicidios_ecuador_2026.html", 
-  selfcontained = TRUE  # Esto incluye todo en un solo archivo (ideal para enviar por correo)
+  file = "mapa_homicidios_ecuador_corregido.html", 
+  selfcontained = TRUE 
 )
