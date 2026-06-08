@@ -185,7 +185,7 @@ mapa_completo <- leaflet(base_para_mapa) %>%
   addProviderTiles(providers$CartoDB.DarkMatter) %>% 
   addHeatmap(
     lng = ~lng_map, lat = ~lat_map,
-    blur = 15, radius = 10, max = 0.5, 
+    blur = 20, radius = 15, max = 0.05, 
     group = "Calor: Homicidios"
   ) %>%
   addCircleMarkers(

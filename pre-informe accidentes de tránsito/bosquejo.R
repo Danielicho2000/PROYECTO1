@@ -76,21 +76,26 @@ base_limpia <- base_limpia %>%
     LATITUD_Y = as.numeric(LATITUD_Y)
   ) %>%
   filter(!is.na(LONGITUD_X) & !is.na(LATITUD_Y))
-rm("base_cruda")
-mapa_completo <- base_limpia %>% 
+base_limpia_corregida <- base_limpia %>%
+  filter(!(
+    LONGITUD_X >= -78.5405 & LONGITUD_X <= -78.5395 &  
+      as.Date(FECHA) >= as.Date("2024-06-17") &          
+      as.Date(FECHA) <= as.Date("2024-06-25")            
+  ))
+
+# Asegúrate de reescribir el objeto espacial con la base corregida
+mapa_completo_corregido <- base_limpia_corregida %>% 
   st_as_sf(coords = c("LONGITUD_X", "LATITUD_Y"), crs = 4326)
-#### MAPA COMPLETO DE LAS UBICACIONES DE ACCIDENTES
+
 mapa_ubic <- leaflet() %>%
-  # Añadimos un mapa base de fondo (en tonos grises para que resalten tus datos)
   addProviderTiles(providers$CartoDB.Positron) %>%
-  # Usamos addGlPoints en lugar de los marcadores tradicionales
   addGlPoints(
-    data = mapa_completo, 
+    data = mapa_completo_corregido,  
     fillColor = "darkred", 
     fillOpacity = 0.5,
-    radius = 3 # Tamaño del punto
+    radius = 3 
   )
-# Mostrar el mapa
+
 mapa_ubic
 #### MAPA DE CALOR DE ACCIDENTES
 mapa_calor <- leaflet(base_limpia) %>%
