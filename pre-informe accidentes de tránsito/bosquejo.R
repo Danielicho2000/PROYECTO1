@@ -69,13 +69,6 @@ base_cruda<-readRDS("Base_estudio.rds")
 #     LONGITUD != 0 & LATITUD != 0 # Eliminar la Isla Null
 #   )
 #saveRDS(base_limpia,"base_limpia.rds")
-base_limpia<-readRDS("base_limpia.rds")
-base_limpia <- base_limpia %>%
-  mutate(
-    LONGITUD_X = as.numeric(LONGITUD_X),
-    LATITUD_Y = as.numeric(LATITUD_Y)
-  ) %>%
-  filter(!is.na(LONGITUD_X) & !is.na(LATITUD_Y))
 base_limpia_corregida <- base_limpia %>%
   filter(!(
     LONGITUD_X >= -78.5405 & LONGITUD_X <= -78.5395 &  
@@ -83,17 +76,25 @@ base_limpia_corregida <- base_limpia %>%
       as.Date(FECHA) <= as.Date("2024-06-25")            
   ))
 
-# Asegúrate de reescribir el objeto espacial con la base corregida
+base_limpia_corregida <- base_limpia_corregida %>%
+  filter(!(
+   
+    LATITUD_Y >= -3.5  & LATITUD_Y <= -2.1 &   # Rango de latitud desde el sur hasta Santa Elena
+      LONGITUD_X <= -80.1                         # Todo lo que esté a la izquierda de Machala/Guayaquil en ese tramo
+  )) %>%
+  filter(LONGITUD_X > -81.05)
+saveRDS(base_limpia_corregida,"base_limpia.rds")
 mapa_completo_corregido <- base_limpia_corregida %>% 
   st_as_sf(coords = c("LONGITUD_X", "LATITUD_Y"), crs = 4326)
 
 mapa_ubic <- leaflet() %>%
   addProviderTiles(providers$CartoDB.Positron) %>%
-  addGlPoints(
+  addCircleMarkers(
     data = mapa_completo_corregido,  
-    fillColor = "darkred", 
+    color = "darkred", 
+    stroke = FALSE,      
     fillOpacity = 0.5,
-    radius = 3 
+    radius = 2           
   )
 
 mapa_ubic

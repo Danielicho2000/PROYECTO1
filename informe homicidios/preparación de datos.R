@@ -24,8 +24,8 @@ buffer_pico <- 400      # Metros de radio para extraer amenidades en zonas crít
 # 2. CARGA Y LIMPIEZA DE DATOS
 # =============================================================================
 # Lectura de bases
-base_1 <- read.csv("D:\\PROYECTO1\\mdi_homicidiosintencionales_pm_2014_2025.csv")
-base_2 <- read.csv("D:\\PROYECTO1\\mdi_homicidiosintencionalse_pm_2026_enero_febrer.csv")
+base_1 <- read.csv("D:\\PROYECTO1\\pre-informe homicidios\\mdi_homicidiosintencionales_pm_2014_2025.csv")
+base_2 <- read.csv("D:\\PROYECTO1\\pre-informe homicidios\\mdi_homicidiosintencionalse_pm_2026_enero_febrer.csv")
 base_cruda <- bind_rows(base_1, base_2)
 rm(list=c("base_1","base_2"))
 
@@ -172,17 +172,14 @@ saveRDS(base_distancias,"base_distancias.rds")
 # =============================================================================
 # 6. MAPA DE CALOR DE LOS HOMICIDIOS
 # =============================================================================
-base_con_vecinos<-readRDS("base_con_vecinos.rds")
-base_para_mapa <- base_con_vecinos %>%
+base_para_mapa <- base_sf %>%
   mutate(
     lng_map = st_coordinates(.)[,1],  
     lat_map = st_coordinates(.)[,2]   
   ) %>%
-  st_drop_geometry()
-
-# Construcción del Mapa
-mapa_completo <- leaflet(base_para_mapa) %>%
-  addProviderTiles(providers$CartoDB.DarkMatter) %>% 
+  st_drop_geometry() 
+mapa_completo <- leaflet(base_para_mapa) %>% 
+  addProviderTiles(providers$CartoDB.Positron) %>%  
   addHeatmap(
     lng = ~lng_map, lat = ~lat_map,
     blur = 20, radius = 15, max = 0.05, 
@@ -190,23 +187,18 @@ mapa_completo <- leaflet(base_para_mapa) %>%
   ) %>%
   addCircleMarkers(
     lng = ~lng_map, lat = ~lat_map,
-    radius = 4,
-    color = "#ff4500", # Color naranja/rojo fuego
-    stroke = FALSE, fillOpacity = 0.6,
-    # Un popup interactivo para ver detalles al hacer clic
-    popup = ~paste("<b>Fecha:</b>", fecha_infraccion, "<br>",
-                   "<b>Motivación:</b>", presunta_motivacion, "<br>",
-                   "<b>Distrito:</b>", distrito),
-    clusterOptions = markerClusterOptions(), 
+    radius = 2,                 # Radio pequeño para que se asemeje a los pixeles de tu imagen
+    color = "#7A1C1C",          # Color vino/marrón similar al de tu mapa
+    stroke = FALSE, 
+    fillOpacity = 0.7,
+    popup = ~paste("<b>ID Evento:</b>", event_id), 
     group = "Puntos: Homicidios"
   ) %>%
-  
-  # CONTROL DE CAPAS
   addLayersControl(
     overlayGroups = c("Calor: Homicidios", "Puntos: Homicidios"),
     options = layersControlOptions(collapsed = FALSE)
   ) %>%
-  hideGroup("Puntos: Homicidios") 
+  hideGroup("Puntos: Homicidios")
 
 mapa_completo
 
